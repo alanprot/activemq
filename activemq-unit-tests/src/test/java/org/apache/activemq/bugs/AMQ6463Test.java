@@ -62,7 +62,7 @@ public class AMQ6463Test extends JmsTestSupport {
         final MessageProducer producer = session.createProducer(queueA);
 
         TextMessage message = session.createTextMessage("test msg");
-        final int numMessages = 20;
+        final int numMessages = 2000;
         long time = 5;
         message.setStringProperty(ScheduledMessage.AMQ_SCHEDULED_CRON, "* * * * *");
         message.setLongProperty(ScheduledMessage.AMQ_SCHEDULED_DELAY, time);
@@ -86,6 +86,10 @@ public class AMQ6463Test extends JmsTestSupport {
         	msg = (TextMessage) consumer.receive(10000);
         	assertNotNull("received: " + idx, msg);
         	msg.acknowledge();
+
+            if (gotUsageBlocked.get()){
+                break;
+            }
         }
         assertTrue("no errors in the log", errors.get() == 0);
         assertTrue("got blocked message", gotUsageBlocked.get());
