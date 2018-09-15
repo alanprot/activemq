@@ -62,11 +62,11 @@ public class AMQ6463Test extends JmsTestSupport {
         final MessageProducer producer = session.createProducer(queueA);
 
         TextMessage message = session.createTextMessage("test msg");
-        final int numMessages = 2000;
-        long time = 5;
+        final int numMessages = 20;
+
         message.setStringProperty(ScheduledMessage.AMQ_SCHEDULED_CRON, "* * * * *");
-        message.setLongProperty(ScheduledMessage.AMQ_SCHEDULED_DELAY, time);
-        message.setLongProperty(ScheduledMessage.AMQ_SCHEDULED_PERIOD, 5);
+        message.setLongProperty(ScheduledMessage.AMQ_SCHEDULED_DELAY, 0);
+        message.setLongProperty(ScheduledMessage.AMQ_SCHEDULED_PERIOD, 0);
         message.setIntProperty(ScheduledMessage.AMQ_SCHEDULED_REPEAT, numMessages - 1);
 
         producer.send(message);
@@ -78,7 +78,7 @@ public class AMQ6463Test extends JmsTestSupport {
             public boolean isSatisified() throws Exception {
                 return gotUsageBlocked.get();
             }
-        }));
+        }, 60000));
 
         MessageConsumer consumer = session.createConsumer(queueA);
         TextMessage msg;
@@ -86,10 +86,7 @@ public class AMQ6463Test extends JmsTestSupport {
         	msg = (TextMessage) consumer.receive(10000);
         	assertNotNull("received: " + idx, msg);
         	msg.acknowledge();
-
-            if (gotUsageBlocked.get()){
-                break;
-            }
+            Thread.sleep(100);
         }
         assertTrue("no errors in the log", errors.get() == 0);
         assertTrue("got blocked message", gotUsageBlocked.get());
@@ -102,6 +99,8 @@ public class AMQ6463Test extends JmsTestSupport {
         service.setUseJmx(false);
         service.setSchedulerSupport(true);
         service.setDeleteAllMessagesOnStartup(true);
+
+        service.getSystemUsage().getMemoryUsage().setLimit(512);
 
         // Setup a destination policy where it takes only 1 message at a time.
         PolicyMap policyMap = new PolicyMap();

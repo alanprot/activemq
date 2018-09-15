@@ -19,6 +19,7 @@ package org.apache.activemq.bugs;
 import org.apache.activemq.broker.BrokerFactory;
 import org.apache.activemq.broker.BrokerService;
 import org.apache.activemq.util.DefaultTestAppender;
+import org.apache.activemq.util.Wait;
 import org.apache.log4j.Appender;
 import org.apache.log4j.Logger;
 import org.apache.log4j.spi.LoggingEvent;
@@ -93,11 +94,16 @@ public class AMQ3625Test {
         };
         Logger.getRootLogger().addAppender(appender);
         
-        String connectURI = broker1.getConnectorByName("openwire").getConnectUri().toString();
-        connectURI = connectURI.replace("?needClientAuth=true", "");
+        int port = broker1.getConnectorByName("openwire").getConnectUri().getPort();
+        String connectURI = "ssl://localhost:" + port;
         broker2.addNetworkConnector("static:(" + connectURI + ")").start();
-        
-        Thread.sleep(10 * 1000);
+
+        assertTrue("got authentication event", Wait.waitFor(new Wait.Condition() {
+            @Override
+            public boolean isSatisified() throws Exception {
+                return authenticationFailed.get();
+            }
+        }));
         
         Logger.getRootLogger().removeAppender(appender);
         
