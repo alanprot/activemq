@@ -65,6 +65,7 @@ import org.apache.activemq.broker.BrokerServiceAware;
 import org.apache.activemq.broker.region.Destination;
 import org.apache.activemq.broker.region.Queue;
 import org.apache.activemq.broker.region.Topic;
+import org.apache.activemq.command.ActiveMQDestination;
 import org.apache.activemq.command.MessageAck;
 import org.apache.activemq.command.TransactionId;
 import org.apache.activemq.openwire.OpenWireFormat;
@@ -3037,7 +3038,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     @SuppressWarnings("rawtypes")
     protected final LinkedHashMap<TransactionId, List<Operation>> preparedTransactions = new LinkedHashMap<>();
     protected final Set<String> ackedAndPrepared = new HashSet<>();
-    protected final Set<String> rolledBackAcks = new HashSet<>();
+    protected final LinkedHashMap<ActiveMQDestination, Set<String>> rolledBackAcks = new LinkedHashMap<>();
 
     // messages that have prepared (pending) acks cannot be re-dispatched unless the outcome is rollback,
     // till then they are skipped by the store.
@@ -3061,7 +3062,8 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                     final String id = ack.getLastMessageId().toProducerKey();
                     ackedAndPrepared.remove(id);
                     if (rollback) {
-                        rolledBackAcks.add(id);
+                        rolledBackAcks.computeIfAbsent(ack.getDestination(), k -> new HashSet<>())
+                                .add(id);
                     }
                 }
             } finally {

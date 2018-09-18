@@ -33,7 +33,7 @@ public class KahaDBXARecoveryBrokerTest  extends XARecoveryBrokerTest {
     }
 
     protected ActiveMQDestination createDestination() {
-        return new ActiveMQQueue("test");
+        return new ActiveMQQueue("special,test");
     }
 
     public void testPreparedTransactionRecoveredPurgeCommitOnRestart() throws Exception {

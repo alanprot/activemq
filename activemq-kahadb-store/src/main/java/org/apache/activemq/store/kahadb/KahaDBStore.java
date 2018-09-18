@@ -20,6 +20,7 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -88,6 +89,7 @@ import org.apache.activemq.util.ThreadPoolUtils;
 import org.apache.activemq.wireformat.WireFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 
 public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, NoLocalSubscriptionAware {
     static final Logger LOG = LoggerFactory.getLogger(KahaDBStore.class);
@@ -610,7 +612,10 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, 
         protected int recoverRolledBackAcks(StoredDestination sd, Transaction tx, int maxReturned, MessageRecoveryListener listener) throws Exception {
             int counter = 0;
             String id;
-            for (Iterator<String> iterator = rolledBackAcks.iterator(); iterator.hasNext(); ) {
+
+            Set<String> rolledBackAckIds = rolledBackAcks.getOrDefault(convert(dest), Collections.emptySet());
+
+            for (Iterator<String> iterator = rolledBackAckIds.iterator(); iterator.hasNext(); ) {
                 id = iterator.next();
                 iterator.remove();
                 Long sequence = sd.messageIdIndex.get(tx, id);
