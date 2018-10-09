@@ -312,26 +312,39 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
             }
             break;
         }
-
-        MessageId candidate = lastCachedIds[ASYNC_ADD];
-        if (candidate != null) {
-            // ensure we don't skip current possibly sync add b/c we waited on the future
-            if (!isAsync(currentAdd) && Long.compare(((Long) currentAdd.getMessageId().getFutureOrSequenceLong()), ((Long) lastCachedIds[ASYNC_ADD].getFutureOrSequenceLong())) < 0) {
-                if (LOG.isTraceEnabled()) {
-                    LOG.trace("no set batch from async:" + candidate.getFutureOrSequenceLong() + " >= than current: " + currentAdd.getMessageId().getFutureOrSequenceLong() + ", " + this);
+        // Reset cached messages as we can have messages cached with lower priority than in the store
+        if (prioritizedMessages) {
+            if (last != null) {
+                setBatch(last.getMessageId());
+            }
+            for (MessageReference msg : batchList) {
+                rollback(msg.getMessageId());
+                msg.decrementReferenceCount();
+            }
+            batchList.clear();
+        }  else {
+            MessageId candidate = lastCachedIds[ASYNC_ADD];
+            if (candidate != null) {
+                // ensure we don't skip current possibly sync add b/c we waited on the future
+                if (!isAsync(currentAdd) && Long.compare(((Long) currentAdd.getMessageId().getFutureOrSequenceLong()), ((Long) lastCachedIds[ASYNC_ADD].getFutureOrSequenceLong())) < 0) {
+                    if (LOG.isTraceEnabled()) {
+                        LOG.trace("no set batch from async:" + candidate.getFutureOrSequenceLong() + " >= than current: " + currentAdd.getMessageId().getFutureOrSequenceLong() + ", " + this);
+                    }
+                    candidate = null;
                 }
-                candidate = null;
+            }
+            if (candidate == null) {
+                candidate = lastCachedIds[SYNC_ADD];
+            }
+            if (candidate != null) {
+                setBatch(candidate);
             }
         }
-        if (candidate == null) {
-            candidate = lastCachedIds[SYNC_ADD];
-        }
-        if (candidate != null) {
-            setBatch(candidate);
-        }
+
         // cleanup
         lastCachedIds[SYNC_ADD] = lastCachedIds[ASYNC_ADD] = null;
         pendingCachedIds.clear();
+
     }
 
     private void trackLastCached(MessageReference node) {

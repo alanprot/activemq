@@ -224,6 +224,33 @@ abstract public class MessagePriorityTest extends CombinationTestSupport {
         }
     }
 
+    public void initCombosForTestQueuesWithLimitedMemory() {
+        addCombinationValues("useCache", new Object[] {new Boolean(true), new Boolean(false)});
+        addCombinationValues("deliveryMode", new Object[] {new Integer(DeliveryMode.PERSISTENT)});
+    }
+
+    public void testQueuesWithLimitedMemory() throws Exception {
+        ActiveMQQueue queue = (ActiveMQQueue)sess.createQueue("TEST");
+        broker.getSystemUsage().getMemoryUsage().setLimit(1024 * 1024);
+
+        ProducerThread lowPri = new ProducerThread(queue, MSG_NUM, LOW_PRI);
+        ProducerThread highPri = new ProducerThread(queue, MSG_NUM, HIGH_PRI);
+
+        lowPri.start();
+        highPri.start();
+
+        lowPri.join();
+        highPri.join();
+
+        MessageConsumer queueConsumer = sess.createConsumer(queue);
+        for (int i = 0; i < MSG_NUM * 2; i++) {
+            Message msg = queueConsumer.receive(5000);
+            LOG.debug("received i=" + i + ", " + (msg!=null? msg.getJMSMessageID() : null));
+            assertNotNull("Message " + i + " was null", msg);
+            assertEquals("Message " + i + " has wrong priority", i < MSG_NUM ? HIGH_PRI : LOW_PRI, msg.getJMSPriority());
+        }
+    }
+
     protected Message createMessage(int priority) throws Exception {
         final String text = "priority " + priority;
         Message msg = sess.createTextMessage(text);
