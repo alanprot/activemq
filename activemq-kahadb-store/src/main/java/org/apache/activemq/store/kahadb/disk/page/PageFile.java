@@ -236,6 +236,7 @@ public class PageFile {
 
         String fileType;
         String fileTypeVersion;
+        long freePagesFingerPrint;
 
         long metaDataTxId = -1;
         int pageSize;
@@ -257,6 +258,14 @@ public class PageFile {
 
         public void setFileTypeVersion(String version) {
             this.fileTypeVersion = version;
+        }
+
+        public long getFreePagesFingerPrint() {
+            return freePagesFingerPrint;
+        }
+
+        public void setFreePagesFingerPrint(long fingerPrint) {
+            this.freePagesFingerPrint = fingerPrint;
         }
 
         public long getMetaDataTxId() {
@@ -402,12 +411,12 @@ public class PageFile {
             }
 
             boolean needsFreePageRecovery = false;
+            if (metaData.getFreePages() > 0) {
+                loadFreeList();
+            }
 
             if (metaData.isCleanShutdown()) {
                 nextTxid.set(metaData.getLastTxId() + 1);
-                if (metaData.getFreePages() > 0) {
-                    loadFreeList();
-                }
             } else {
                 LOG.debug(toString() + ", Recovering page file...");
                 nextTxid.set(redoRecoveryUpdates());
@@ -419,7 +428,8 @@ public class PageFile {
             }
             nextFreePageId.set((writeFile.length() - PAGE_FILE_HEADER_SIZE) / pageSize);
 
-            if (needsFreePageRecovery) {
+            if (needsFreePageRecovery && metaData.freePagesFingerPrint != freeList.getFingerPrint()) {
+                freeList.clear();
                 // Scan all to find the free pages after nextFreePageId is set
                 freeList = new SequenceSet();
                 for (Iterator<Page> i = tx().iterator(true); i.hasNext(); ) {
@@ -432,7 +442,7 @@ public class PageFile {
 
             metaData.setCleanShutdown(false);
             storeMetaData();
-            getFreeFile().delete();
+            //getFreeFile().delete();
             startWriter();
         } else {
             throw new IllegalStateException("Cannot load the page file when it is already loaded.");
@@ -606,6 +616,8 @@ public class PageFile {
     private void storeMetaData() throws IOException {
         // Convert the metadata into a property format
         metaData.metaDataTxId++;
+        metaData.freePagesFingerPrint = freeList.getFingerPrint();
+        metaData.freePages = freeList.size();
         Properties p = new Properties();
         IntrospectionSupport.getProperties(metaData, p, null);
 
@@ -1128,6 +1140,9 @@ public class PageFile {
                     }
                 }
             }
+
+            storeFreeList();
+            storeMetaData();
 
             if (checkpointLatch != null) {
                 checkpointLatch.countDown();

@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Random;
 
 /**
  * Keeps track of a added long values. Collapses ranges of numbers using a
@@ -32,13 +33,18 @@ import java.util.NoSuchElementException;
  * @author chirino
  */
 public class SequenceSet extends LinkedNodeList<Sequence> implements Iterable<Long> {
-
+    private long fingerPrint = 0;
+    public long getFingerPrint() {
+        return fingerPrint;
+    }
     public static class Marshaller implements org.apache.activemq.store.kahadb.disk.util.Marshaller<SequenceSet> {
 
         public static final Marshaller INSTANCE = new Marshaller();
+        private static Random random = new Random();
 
         public SequenceSet readPayload(DataInput in) throws IOException {
             SequenceSet value = new SequenceSet();
+            value.fingerPrint = in.readLong();
             int count = in.readInt();
             for (int i = 0; i < count; i++) {
                 if( in.readBoolean() ) {
@@ -53,6 +59,8 @@ public class SequenceSet extends LinkedNodeList<Sequence> implements Iterable<Lo
         }
 
         public void writePayload(SequenceSet value, DataOutput out) throws IOException {
+            value.fingerPrint = random.nextLong();
+            out.writeLong(value.fingerPrint);
             out.writeInt(value.size());
             Sequence sequence = value.getHead();
             while (sequence != null ) {
