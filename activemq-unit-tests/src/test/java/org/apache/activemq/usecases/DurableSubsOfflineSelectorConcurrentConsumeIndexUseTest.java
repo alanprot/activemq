@@ -215,10 +215,10 @@ public class DurableSubsOfflineSelectorConcurrentConsumeIndexUseTest extends org
             LOG.info("Store free page count: " + store.getPageFile().getFreePageCount());
             LOG.info("Store page in-use: " + (store.getPageFile().getPageCount() - store.getPageFile().getFreePageCount()));
 
-            assertTrue("no leak of pages, always use just 11", Wait.waitFor(new Wait.Condition() {
+            assertTrue("no leak of pages, always use just 12", Wait.waitFor(new Wait.Condition() {
                 @Override
                 public boolean isSatisified() throws Exception {
-                    return 11 == store.getPageFile().getPageCount() -
+                    return 12 == store.getPageFile().getPageCount() -
                             store.getPageFile().getFreePageCount();
                 }
             }, TimeUnit.SECONDS.toMillis(10)));

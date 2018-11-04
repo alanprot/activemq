@@ -44,6 +44,7 @@ import javax.jms.MessageListener;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertTrue;
 
@@ -206,7 +207,7 @@ public abstract class DurableSubscriptionOfflineTestBase {
 
 class DurableSubscriptionOfflineTestListener implements MessageListener {
     private static final Logger LOG = LoggerFactory.getLogger(DurableSubscriptionOfflineTestListener.class);
-    int count = 0;
+    AtomicInteger count = new AtomicInteger();
     String id = null;
 
     DurableSubscriptionOfflineTestListener() {}
@@ -216,7 +217,7 @@ class DurableSubscriptionOfflineTestListener implements MessageListener {
     }
     @Override
     public void onMessage(javax.jms.Message message) {
-        count++;
+        count.incrementAndGet();
         if (id != null) {
             try {
                 LOG.info(id + ", " + message.getJMSMessageID());

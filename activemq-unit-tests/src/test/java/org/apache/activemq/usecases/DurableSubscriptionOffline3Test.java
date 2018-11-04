@@ -403,7 +403,7 @@ public class DurableSubscriptionOffline3Test extends DurableSubscriptionOfflineT
 
         @Override
         public void onMessage(Message message) {
-            count++;
+            count.incrementAndGet();
 
             try {
                 Object b = message.getObjectProperty("$b");

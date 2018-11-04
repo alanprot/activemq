@@ -109,7 +109,7 @@ public class DurableSubscriptionOffline4Test extends DurableSubscriptionOfflineT
             @Override
             public boolean isSatisified() throws Exception {
                 LOG.info("Want: " + toSend  + ", current: " + listener.count);
-                return listener.count == toSend;
+                return listener.count.get() == toSend;
             }
         }));
         session.close();
