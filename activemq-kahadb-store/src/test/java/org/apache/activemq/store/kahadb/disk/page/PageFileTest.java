@@ -345,7 +345,7 @@ public class PageFileTest extends TestCase {
         Transaction tx3 = pf2.tx();
         tx3.allocate(100);
 
-        assertTrue("We have 10 free pages", Wait.waitFor(new Wait.Condition() {
+        assertTrue("We have 100100 free pages", Wait.waitFor(new Wait.Condition() {
             @Override
             public boolean isSatisified() throws Exception {
                 pf2.flush();
