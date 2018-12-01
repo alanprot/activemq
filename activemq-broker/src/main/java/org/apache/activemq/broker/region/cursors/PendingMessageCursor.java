@@ -308,4 +308,6 @@ public interface PendingMessageCursor extends Service {
 
     public void rebase();
 
+    void waitAsyncMessages();
+
 }

@@ -37,4 +37,5 @@ public class StoreQueueCursorLevelDBNoDuplicateTest extends StoreQueueCursorNoDu
         broker.setPersistenceAdapter(store);
         return broker;
     }
+
 }

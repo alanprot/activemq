@@ -18,7 +18,6 @@
 package org.apache.activemq.broker.region.cursors;
 
 import junit.framework.TestCase;
-
 import org.apache.activemq.broker.BrokerService;
 import org.apache.activemq.broker.ConnectionContext;
 import org.apache.activemq.broker.region.DestinationStatistics;
@@ -26,13 +25,19 @@ import org.apache.activemq.broker.region.MessageReference;
 import org.apache.activemq.broker.region.Queue;
 import org.apache.activemq.command.ActiveMQQueue;
 import org.apache.activemq.command.ActiveMQTextMessage;
+import org.apache.activemq.command.ConnectionId;
 import org.apache.activemq.command.ConsumerInfo;
+import org.apache.activemq.command.LocalTransactionId;
+import org.apache.activemq.command.MessageAck;
 import org.apache.activemq.command.MessageId;
 import org.apache.activemq.store.MessageStore;
 import org.apache.activemq.store.PersistenceAdapter;
 import org.apache.activemq.usage.SystemUsage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.EnumSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * @author gtully
@@ -47,8 +52,16 @@ public class StoreQueueCursorNoDuplicateTest extends TestCase {
     final static String mesageIdRoot = "11111:22222:0:";
     final int messageBytesSize = 1024;
     final String text = new String(new byte[messageBytesSize]);
+    int messageId = 0;
+    int dequeueCount = 0;
 
-    protected int count = 6;
+    private enum Transacted {
+        ALWAYS,
+        NEVER,
+        MIXED
+    }
+
+    protected int count = 60;
 
     @Override
     public void setUp() throws Exception {
@@ -115,6 +128,108 @@ public class StoreQueueCursorNoDuplicateTest extends TestCase {
         }
         underTest.release();
         assertEquals(count, dequeueCount);
+    }
+
+    public void testFastSlowConsumersNoDuplicate() throws Exception {
+        final int numberOfFlips = 40;
+        final PersistenceAdapter persistenceAdapter = brokerService
+                .getPersistenceAdapter();
+        final MessageStore queueMessageStore = persistenceAdapter
+                .createQueueMessageStore(destination);
+        final ConnectionContext context = createConnectionContext();
+        final Queue queue = new Queue(brokerService, destination,
+                queueMessageStore, new DestinationStatistics(), null);
+
+        queueMessageStore.start();
+        queueMessageStore.registerIndexListener(null);
+
+        EnumSet<Transacted> transactions = EnumSet.allOf(Transacted.class);
+
+        for (Transacted transacted : transactions) {
+            produce(queue, queueMessageStore, context, numberOfFlips, transacted);
+            receive(queue, queueMessageStore, context, count * numberOfFlips, numberOfFlips, transacted != Transacted.MIXED);
+        }
+
+        assertEquals(count * numberOfFlips * 3, dequeueCount);
+    }
+
+    private QueueStorePrefetch createQueuePrefetch(final Queue queue, final int numberOfFlips) throws Exception {
+        QueueStorePrefetch underTest = new QueueStorePrefetch(queue, brokerService.getBroker());
+        SystemUsage systemUsage = new SystemUsage();
+
+        // ensure memory limit is reached
+        systemUsage.getMemoryUsage().setLimit(messageBytesSize * (numberOfFlips / 2 * count));
+        underTest.setSystemUsage(systemUsage);
+        underTest.setEnableAudit(false);
+        underTest.start();
+
+        return underTest;
+    }
+
+    private void receive(Queue queue, final MessageStore queueMessageStore, final ConnectionContext context, final int total, final int numberOfFlips, final boolean checkOrder) throws Exception {
+        QueueStorePrefetch underTest = createQueuePrefetch(queue, numberOfFlips);
+        int dequeuedNow = 0;
+        while (underTest.hasNext() && dequeuedNow < total) {
+            MessageReference ref = underTest.next();
+            ref.decrementReferenceCount();
+            underTest.remove();
+           // LOG.info("Received message: {} with body: {}",
+             //       ref.getMessageId(), ((ActiveMQTextMessage)ref.getMessage()).getText());
+            if (checkOrder) {
+                assertEquals(dequeueCount++, ref.getMessageId().getProducerSequenceId());
+            } else {
+                dequeueCount++;
+            }
+            dequeuedNow++;
+            queueMessageStore.removeMessage(context, new MessageAck(ref.getMessage(), MessageAck.STANDARD_ACK_TYPE, 1));
+        }
+    }
+
+    private ConnectionContext createConnectionContext() {
+        final ConnectionContext context = new ConnectionContext();
+        context.setConnectionId(new ConnectionId("connection:1"));
+        context.setTransactions(new ConcurrentHashMap<>());
+        return context;
+    }
+
+    private void produce(final Queue queue, final MessageStore queueMessageStore, final ConnectionContext context, final int numberOfFlips, final Transacted transacted) throws Exception {
+        QueueStorePrefetch queueStorePrefetch = createQueuePrefetch(queue, numberOfFlips);
+        for (int j = 0; j < numberOfFlips; j++) {
+            boolean fastConsumers = j % 2 == 0;
+            for (int i = 0; i < count; i++) {
+                boolean shouldCreateTransaction = transacted == Transacted.ALWAYS || (transacted == Transacted.MIXED && i % 3 == 0);
+
+                ActiveMQTextMessage msg = getMessage(messageId++);
+                LocalTransactionId localTransactionId = null;
+
+                if (shouldCreateTransaction) {
+                    localTransactionId = new LocalTransactionId(context.getConnectionId(), messageId);
+                    brokerService.getBroker().beginTransaction(context, localTransactionId);
+                    msg.setTransactionId(localTransactionId);
+                }
+
+                msg.setMemoryUsage(queueStorePrefetch.getSystemUsage().getMemoryUsage());
+
+                if (fastConsumers && queueStorePrefetch.isCacheEnabled()) {
+                    // Simulate concurrentStoreAndDispatchQueue + fast consumers
+                    queueMessageStore.asyncAddQueueMessage(context, msg);
+                } else {
+                    queueMessageStore.addMessage(context, msg);
+                }
+
+                if (localTransactionId != null) {
+                    brokerService.getBroker().commitTransaction(context, localTransactionId, true);
+                }
+                queueStorePrefetch.addMessageLast(msg);
+            }
+
+            //Simulate the flip BTW fast and slow consumers
+            if (fastConsumers) {
+                queueStorePrefetch.waitAsyncMessages();
+            }
+        }
+        queueStorePrefetch.stop();
+        queueStorePrefetch.release();
     }
 
     private ActiveMQTextMessage getMessage(int i) throws Exception {

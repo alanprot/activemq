@@ -271,6 +271,29 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         return super.isCacheEnabled() || enableCacheNow();
     }
 
+    @Override
+    public void waitAsyncMessages() {
+        for (ListIterator<MessageId> it = pendingCachedIds.listIterator(pendingCachedIds.size()); it.hasPrevious(); ) {
+            MessageId lastPending = it.previous();
+            Object futureOrLong = lastPending.getFutureOrSequenceLong();
+            if (futureOrLong instanceof Future) {
+                Future future = (Future) futureOrLong;
+                if (future.isCancelled()) {
+                    continue;
+                }
+                try {
+                    future.get(5, TimeUnit.SECONDS);
+                } catch (CancellationException ok) {
+                    continue;
+                } catch (TimeoutException potentialDeadlock) {
+                    LOG.debug("{} timed out waiting for async add", this, potentialDeadlock);
+                } catch (Exception worstCaseWeReplay) {
+                    LOG.debug("{} exception waiting for async add", this, worstCaseWeReplay);
+                }
+            }
+        }
+    }
+
     protected boolean enableCacheNow() {
         boolean result = false;
         if (canEnableCash()) {
@@ -331,7 +354,15 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         }
         if (candidate == null) {
             candidate = lastCachedIds[SYNC_ADD];
+        } else {
+            // Check if the last cached was SYNC
+            // Now we can send Async messages and after sync and still have cache - Slow Consumers
+            if (lastCachedIds[SYNC_ADD] != null && Long.compare((Long)lastCachedIds[SYNC_ADD].getFutureOrSequenceLong(), (Long)candidate.getFutureOrSequenceLong()) > 0 ){
+                candidate = lastCachedIds[SYNC_ADD];
+            }
         }
+
+
         if (candidate != null) {
             setBatch(candidate);
         }

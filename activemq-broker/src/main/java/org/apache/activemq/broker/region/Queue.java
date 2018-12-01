@@ -136,6 +136,7 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
     private CountDownLatch consumersBeforeStartsLatch;
     private final AtomicLong pendingWakeups = new AtomicLong();
     private boolean allConsumersExclusiveByDefault = false;
+    private boolean optimizeEnqueue = isDoOptimzeMessageStorage();
 
     private volatile boolean resetNeeded;
 
@@ -824,6 +825,15 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
             messagesLock.writeLock().lock();
             try {
                 for (MessageContext messageContext : orderedUpdates) {
+
+                    // Turning of async send as this queue does not have fast consumers
+                    if (!isOptimizeStorage() && optimizeEnqueue) {
+                        messages.waitAsyncMessages();
+                        optimizeEnqueue = false;
+                    } else if (!optimizeEnqueue && isOptimizeStorage() && messages.size() == 0) {
+                        optimizeEnqueue = isDoOptimzeMessageStorage();
+                    }
+
                     if (!messages.addMessageLast(messageContext.message)) {
                         // cursor suppressed a duplicate
                         messageContext.duplicate = true;
@@ -892,7 +902,7 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
                     //This flag causes a sync update later on dispatch which can cause a race
                     //condition if the original add is processed after the update, which can cause
                     //a duplicate message to be stored
-                    if (messages.isCacheEnabled() && !isPersistJMSRedelivered()) {
+                    if (optimizeEnqueue && messages.isCacheEnabled() && !isPersistJMSRedelivered()) {
                         result = store.asyncAddQueueMessage(context, message, isOptimizeStorage());
                         result.addListener(new PendingMarshalUsageTracker(message));
                     } else {
@@ -2444,7 +2454,7 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
     }
 
     protected boolean isOptimizeStorage(){
-        boolean result = false;
+        boolean result = messages.size() == 0;
         if (isDoOptimzeMessageStorage()){
             consumersLock.readLock().lock();
             try{
