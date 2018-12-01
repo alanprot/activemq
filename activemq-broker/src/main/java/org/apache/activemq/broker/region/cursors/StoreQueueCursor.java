@@ -351,4 +351,14 @@ public class StoreQueueCursor extends AbstractPendingMessageCursor {
         reset();
     }
 
+    @Override
+    public void waitAsyncMessages() {
+        if (persistent != null) {
+            persistent.waitAsyncMessages();
+        }
+        if (nonPersistent != null) {
+            nonPersistent.waitAsyncMessages();
+        }
+    }
+
 }
