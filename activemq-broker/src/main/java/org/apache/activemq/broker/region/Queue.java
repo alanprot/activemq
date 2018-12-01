@@ -856,6 +856,13 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
         }
 
         @Override
+        public void beforeCommit() throws Exception {
+            if (store != null && messageContext.message.isPersistent()) {
+                messages.waitAsyncMessages();
+            }
+        }
+
+        @Override
         public void afterCommit() throws Exception {
             if (store != null && messageContext.message.isPersistent()) {
                 doPendingCursorAdditions();
