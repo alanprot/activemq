@@ -458,7 +458,9 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, 
                         ackedAndPrepared.remove(id);
                         if (rollback) {
                             rolledBackAcks.add(id);
-                            incrementAndAddSizeToStoreStat(dest, 0);
+                            pageFile.tx().execute(tx -> {
+                                incrementAndAddSizeToStoreStat(tx, dest, 0);
+                            });
                         }
                     }
                 } finally {
@@ -811,16 +813,19 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, 
                     recoveredStatistics = pageFile.tx().execute(new Transaction.CallableClosure<MessageStoreStatistics, IOException>() {
                         @Override
                         public MessageStoreStatistics execute(Transaction tx) throws IOException {
-                            MessageStoreStatistics statistics = new MessageStoreStatistics();
+                            StoredDestination sd = getStoredDestination(dest, tx);
+                            MessageStoreStatistics statistics = getStoredMessageStoreStatistics(dest, tx);
 
                             // Iterate through all index entries to get the size of each message
-                            StoredDestination sd = getStoredDestination(dest, tx);
-                            for (Iterator<Entry<Location, Long>> iterator = sd.locationIndex.iterator(tx); iterator.hasNext();) {
-                                int locationSize = iterator.next().getKey().getSize();
-                                statistics.getMessageCount().increment();
-                                statistics.getMessageSize().addSize(locationSize > 0 ? locationSize : 0);
+                            if (statistics == null) {
+                                statistics = new MessageStoreStatistics();
+                                for (Iterator<Entry<Location, Long>> iterator = sd.locationIndex.iterator(tx); iterator.hasNext(); ) {
+                                    int locationSize = iterator.next().getKey().getSize();
+                                    statistics.getMessageCount().increment();
+                                    statistics.getMessageSize().addSize(locationSize > 0 ? locationSize : 0);
+                                }
                             }
-                           return statistics;
+                            return statistics;
                         }
                     });
                     recoveredStatistics.getMessageCount().subtract(ackedAndPrepared.size());

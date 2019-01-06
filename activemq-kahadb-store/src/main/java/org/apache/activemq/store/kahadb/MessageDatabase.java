@@ -142,6 +142,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         protected Page<Metadata> page;
         protected int state;
         protected BTreeIndex<String, StoredDestination> destinations;
+        protected BTreeIndex<String, MessageStoreStatistics> messageStoreStatistics;
         protected Location lastUpdate;
         protected Location firstInProgressTransactionLocation;
         protected Location producerSequenceIdTrackerLocation = null;
@@ -188,6 +189,12 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
             } catch (EOFException expectedOnUpgrade) {
                 openwireVersion = OpenWireFormat.DEFAULT_LEGACY_VERSION;
             }
+
+            try {
+                messageStoreStatistics = new BTreeIndex<>(pageFile, is.readLong());
+            } catch (EOFException ignored) {
+            }
+
             LOG.info("KahaDB is version " + version);
         }
 
@@ -223,6 +230,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                 os.writeBoolean(false);
             }
             os.writeInt(this.openwireVersion);
+            os.writeLong(messageStoreStatistics.getPageId());
         }
     }
 
@@ -335,16 +343,24 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                         metadata.page = page;
                         metadata.state = CLOSED_STATE;
                         metadata.destinations = new BTreeIndex<>(pageFile, tx.allocate().getPageId());
+                        metadata.messageStoreStatistics = new BTreeIndex<>(pageFile, tx.allocate().getPageId());
 
                         tx.store(metadata.page, metadataMarshaller, true);
                     } else {
                         Page<Metadata> page = tx.load(0, metadataMarshaller);
                         metadata = page.get();
                         metadata.page = page;
+                        if (metadata.messageStoreStatistics == null) {
+                            metadata.messageStoreStatistics = new BTreeIndex<>(pageFile, tx.allocate().getPageId());
+                        }
                     }
                     metadata.destinations.setKeyMarshaller(StringMarshaller.INSTANCE);
                     metadata.destinations.setValueMarshaller(new StoredDestinationMarshaller());
                     metadata.destinations.load(tx);
+
+                    metadata.messageStoreStatistics.setKeyMarshaller(StringMarshaller.INSTANCE);
+                    metadata.messageStoreStatistics.setValueMarshaller(new MessageStoreStatisticsMarshaller());
+                    metadata.messageStoreStatistics.load(tx);
                 }
             });
             // Load up all the destinations since we need to scan all the indexes to figure out which journal files can be deleted.
@@ -863,7 +879,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                     sd.messageIdIndex.remove(tx, keys.messageId);
                     metadata.producerSequenceIdTracker.rollback(keys.messageId);
                     undoCounter++;
-                    decrementAndSubSizeToStoreStat(key, keys.location.getSize());
+                    decrementAndSubSizeToStoreStat(tx, key, keys.location.getSize());
                     // TODO: do we need to modify the ack positions for the pub sub case?
                 }
             }
@@ -979,7 +995,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                             sd.messageIdIndex.remove(tx, keys.messageId);
                             LOG.info("[" + sdEntry.getKey() + "] dropped: " + keys.messageId + " at corrupt location: " + keys.location);
                             undoCounter++;
-                            decrementAndSubSizeToStoreStat(sdEntry.getKey(), keys.location.getSize());
+                            decrementAndSubSizeToStoreStat(tx, sdEntry.getKey(), keys.location.getSize());
                             // TODO: do we need to modify the ack positions for the pub sub case?
                         }
                     } else {
@@ -1491,7 +1507,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         if (previous == null) {
             previous = sd.messageIdIndex.put(tx, command.getMessageId(), id);
             if (previous == null) {
-                incrementAndAddSizeToStoreStat(command.getDestination(), location.getSize());
+                incrementAndAddSizeToStoreStat(tx, command.getDestination(), location.getSize());
                 sd.orderIndex.put(tx, priority, id, new MessageKeys(command.getMessageId(), location));
                 if (sd.subscriptions != null && !sd.subscriptions.isEmpty(tx)) {
                     addAckLocationForNewMessage(tx, command.getDestination(), sd, id);
@@ -1550,11 +1566,11 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                     new MessageKeys(command.getMessageId(), location)
             );
             sd.locationIndex.put(tx, location, id);
-            incrementAndAddSizeToStoreStat(command.getDestination(), location.getSize());
+            incrementAndAddSizeToStoreStat(tx, command.getDestination(), location.getSize());
 
             if (previousKeys != null) {
                 //Remove the existing from the size
-                decrementAndSubSizeToStoreStat(command.getDestination(), previousKeys.location.getSize());
+                decrementAndSubSizeToStoreStat(tx, command.getDestination(), previousKeys.location.getSize());
 
                 //update all the subscription metrics
                 if (enableSubscriptionStatistics && sd.ackPositions != null && location.getSize() != previousKeys.location.getSize()) {
@@ -1590,7 +1606,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                 MessageKeys keys = sd.orderIndex.remove(tx, sequenceId);
                 if (keys != null) {
                     sd.locationIndex.remove(tx, keys.location);
-                    decrementAndSubSizeToStoreStat(command.getDestination(), keys.location.getSize());
+                    decrementAndSubSizeToStoreStat(tx, command.getDestination(), keys.location.getSize());
                     recordAckMessageReferenceLocation(ackLocation, keys.location);
                     metadata.lastUpdate = ackLocation;
                 }  else if (LOG.isDebugEnabled()) {
@@ -1678,6 +1694,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         metadata.destinations.remove(tx, key);
         clearStoreStats(command.getDestination());
         storeCache.remove(key(command.getDestination()));
+        metadata.messageStoreStatistics.remove(tx, key(command.getDestination()));
     }
 
     void updateIndex(Transaction tx, KahaSubscriptionCommand command, Location location) throws IOException {
@@ -2392,6 +2409,30 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         }
     }
 
+    protected  class MessageStoreStatisticsMarshaller extends VariableMarshaller<MessageStoreStatistics> {
+
+        @Override
+        public void writePayload(final MessageStoreStatistics object, final DataOutput dataOut) throws IOException {
+            dataOut.writeLong(object.getMessageCount().getCount());
+            dataOut.writeLong(object.getMessageSize().getTotalSize());
+            dataOut.writeLong(object.getMessageSize().getMaxSize());
+            dataOut.writeLong(object.getMessageSize().getMinSize());
+            dataOut.writeLong(object.getMessageSize().getCount());
+        }
+
+        @Override
+        public MessageStoreStatistics readPayload(final DataInput dataIn) throws IOException {
+            MessageStoreStatistics messageStoreStatistics = new MessageStoreStatistics();
+            messageStoreStatistics.getMessageCount().setCount(dataIn.readLong());
+            messageStoreStatistics.getMessageSize().setTotalSize(dataIn.readLong());
+            messageStoreStatistics.getMessageSize().setMaxSize(dataIn.readLong());
+            messageStoreStatistics.getMessageSize().setMinSize(dataIn.readLong());
+            messageStoreStatistics.getMessageSize().setCount(dataIn.readLong());
+
+            return messageStoreStatistics;
+        }
+    }
+
     protected class StoredDestinationMarshaller extends VariableMarshaller<StoredDestination> {
 
         final MessageKeysMarshaller messageKeysMarshaller = new MessageKeysMarshaller();
@@ -2541,6 +2582,11 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
             storedDestinations.put(key, rc);
         }
         return rc;
+    }
+
+    protected MessageStoreStatistics getStoredMessageStoreStatistics(KahaDestination destination, Transaction tx) throws IOException {
+        String key = key(destination);
+        return metadata.messageStoreStatistics.get(tx, key);
     }
 
     protected StoredDestination getExistingStoredDestination(KahaDestination destination, Transaction tx) throws IOException {
@@ -2707,31 +2753,58 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
      * @param kahaDestination
      * @param size
      */
-    protected void incrementAndAddSizeToStoreStat(KahaDestination kahaDestination, long size) {
-        incrementAndAddSizeToStoreStat(key(kahaDestination), size);
+    protected void incrementAndAddSizeToStoreStat(Transaction tx, KahaDestination kahaDestination, long size) throws IOException {
+        incrementAndAddSizeToStoreStat(tx, key(kahaDestination), size);
     }
 
-    protected void incrementAndAddSizeToStoreStat(String kahaDestKey, long size) {
+    protected void incrementAndAddSizeToStoreStat(Transaction tx, String kahaDestKey, long size) throws IOException {
         MessageStoreStatistics storeStats = getStoreStats(kahaDestKey);
         if (storeStats != null) {
-            storeStats.getMessageCount().increment();
-            if (size > 0) {
-                storeStats.getMessageSize().addSize(size);
+            incrementAndAddSizeToStoreStat(size, storeStats);
+            metadata.messageStoreStatistics.put(tx, kahaDestKey, storeStats);
+        } else {
+            // During the recovery the storeStats is null
+            MessageStoreStatistics storedStoreStats = metadata.messageStoreStatistics.get(tx, kahaDestKey);
+            if (storedStoreStats == null) {
+                storedStoreStats = new MessageStoreStatistics();
             }
+            incrementAndAddSizeToStoreStat(size, storedStoreStats);
+            metadata.messageStoreStatistics.put(tx, kahaDestKey, storedStoreStats);
         }
     }
 
-    protected void decrementAndSubSizeToStoreStat(KahaDestination kahaDestination, long size) {
-        decrementAndSubSizeToStoreStat(key(kahaDestination), size);
+    private void incrementAndAddSizeToStoreStat(final long size, final MessageStoreStatistics storedStoreStats) {
+        storedStoreStats.getMessageCount().increment();
+        if (size > 0) {
+            storedStoreStats.getMessageSize().addSize(size);
+        }
     }
 
-    protected void decrementAndSubSizeToStoreStat(String kahaDestKey, long size) {
+    protected void decrementAndSubSizeToStoreStat(Transaction tx, KahaDestination kahaDestination, long size) throws IOException {
+        decrementAndSubSizeToStoreStat(tx, key(kahaDestination), size);
+    }
+
+    protected void decrementAndSubSizeToStoreStat(Transaction tx, String kahaDestKey, long size) throws IOException {
         MessageStoreStatistics storeStats = getStoreStats(kahaDestKey);
         if (storeStats != null) {
-            storeStats.getMessageCount().decrement();
-            if (size > 0) {
-                storeStats.getMessageSize().addSize(-size);
+            decrementAndSubSizeToStoreStat(size, storeStats);
+            metadata.messageStoreStatistics.put(tx, kahaDestKey, storeStats);
+        } else {
+            // During the recovery the storeStats is null
+            MessageStoreStatistics storedStoreStats = metadata.messageStoreStatistics.get(tx, kahaDestKey);
+            if (storedStoreStats == null) {
+                storedStoreStats = new MessageStoreStatistics();
             }
+            decrementAndSubSizeToStoreStat(size, storedStoreStats);
+            metadata.messageStoreStatistics.put(tx, kahaDestKey, storedStoreStats);
+        }
+    }
+
+    private void decrementAndSubSizeToStoreStat(final long size, final MessageStoreStatistics storedStoreStats) {
+        storedStoreStats.getMessageCount().decrement();
+
+        if (size > 0) {
+            storedStoreStats.getMessageSize().addSize(-size);
         }
     }
 
@@ -2936,7 +3009,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                     sd.locationIndex.remove(tx, entry.getValue().location);
                     sd.messageIdIndex.remove(tx, entry.getValue().messageId);
                     sd.orderIndex.remove(tx, entry.getKey());
-                    decrementAndSubSizeToStoreStat(command.getDestination(), entry.getValue().location.getSize());
+                    decrementAndSubSizeToStoreStat(tx, command.getDestination(), entry.getValue().location.getSize());
                 }
             }
         }
@@ -2990,7 +3063,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                     sd.locationIndex.remove(tx, entry.getValue().location);
                     sd.messageIdIndex.remove(tx, entry.getValue().messageId);
                     sd.orderIndex.remove(tx, entry.getKey());
-                    decrementAndSubSizeToStoreStat(command.getDestination(), entry.getValue().location.getSize());
+                    decrementAndSubSizeToStoreStat(tx, command.getDestination(), entry.getValue().location.getSize());
                 }
             }
         }
