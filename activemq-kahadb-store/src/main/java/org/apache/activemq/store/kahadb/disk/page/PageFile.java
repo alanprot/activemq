@@ -16,13 +16,28 @@
  */
 package org.apache.activemq.store.kahadb.disk.page;
 
+import org.apache.activemq.store.kahadb.disk.index.HashIndex;
+import org.apache.activemq.store.kahadb.disk.util.BooleanMarshaller;
+import org.apache.activemq.store.kahadb.disk.util.Marshaller;
+import org.apache.activemq.store.kahadb.disk.util.Sequence;
+import org.apache.activemq.store.kahadb.disk.util.SequenceSet;
+import org.apache.activemq.util.DataByteArrayOutputStream;
+import org.apache.activemq.util.IOExceptionSupport;
+import org.apache.activemq.util.IOHelper;
+import org.apache.activemq.util.IntrospectionSupport;
+import org.apache.activemq.util.LFUCache;
+import org.apache.activemq.util.LRUCache;
+import org.apache.activemq.util.RecoverableRandomAccessFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
+import java.io.DataOutput;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
@@ -43,18 +58,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
-
-import org.apache.activemq.store.kahadb.disk.util.Sequence;
-import org.apache.activemq.store.kahadb.disk.util.SequenceSet;
-import org.apache.activemq.util.DataByteArrayOutputStream;
-import org.apache.activemq.util.IOExceptionSupport;
-import org.apache.activemq.util.IOHelper;
-import org.apache.activemq.util.IntrospectionSupport;
-import org.apache.activemq.util.LFUCache;
-import org.apache.activemq.util.LRUCache;
-import org.apache.activemq.util.RecoverableRandomAccessFile;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * A PageFile provides you random access to fixed sized disk pages. This object is not thread safe and therefore access to it should
@@ -146,6 +149,7 @@ public class PageFile {
     private MetaData metaData;
 
     private final HashMap<File, RandomAccessFile> tmpFilesForRemoval = new HashMap<>();
+    private HashIndex<FreePageKey, Boolean> freePageIndex;
 
     private boolean useLFRUEviction = false;
     private float LFUEvictionFactor = 0.2f;
@@ -240,6 +244,69 @@ public class PageFile {
         }
     }
 
+    static class FreePageKey implements Comparable<FreePageKey> {
+        private Long value;
+        public static FreePageKeyMarshaller instance = new FreePageKeyMarshaller();
+
+        static class FreePageKeyMarshaller implements Marshaller<FreePageKey> {
+
+            @Override
+            public void writePayload(final FreePageKey object, final DataOutput dataOut) throws IOException {
+                dataOut.writeLong(object.value);
+            }
+
+            @Override
+            public FreePageKey readPayload(final DataInput dataIn) throws IOException {
+                return FreePageKey.fromLong(dataIn.readLong());
+            }
+
+            @Override
+            public int getFixedSize() {
+                return 8;
+            }
+
+            @Override
+            public boolean isDeepCopySupported() {
+                return true;
+            }
+
+            @Override
+            public FreePageKey deepCopy(final FreePageKey source) {
+                return source;
+            }
+        }
+
+        private FreePageKey(long value) {
+            this.value = value;
+        }
+
+        public static FreePageKey fromLong(Long value) {
+            return new FreePageKey(value);
+        }
+
+        @Override
+        public int hashCode() {
+            return (int)(value / 4096 ^ (value >>> 32));
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (obj instanceof Long) {
+                return value == ((Long)obj).longValue();
+            }
+            return false;
+        }
+
+        @Override
+        public int compareTo(final FreePageKey o) {
+            return this.value.compareTo(o.value);
+        }
+
+        public Long getValue() {
+            return value;
+        }
+    }
+
     /**
      * The MetaData object hold the persistent data associated with a PageFile object.
      */
@@ -253,6 +320,15 @@ public class PageFile {
         boolean cleanShutdown;
         long lastTxId;
         long freePages;
+        long freePageIndexPageId = -1;
+
+        public void setFreePageIndexPageId(long value) {
+            freePageIndexPageId = value;
+        }
+
+        public long getFreePageIndexPageId() {
+            return freePageIndexPageId;
+        }
 
         public String getFileType() {
             return fileType;
@@ -396,6 +472,10 @@ public class PageFile {
                 // Load the page size setting cause that can't change once the file is created.
                 loadMetaData();
                 pageSize = metaData.getPageSize();
+
+                if (metaData.freePageIndexPageId > -1) {
+                    freePageIndex = new HashIndex<>(this, metaData.freePageIndexPageId);
+                }
             } else {
                 // Store the page size setting cause that can't change once the file is created.
                 metaData = new MetaData();
@@ -415,7 +495,10 @@ public class PageFile {
             if (metaData.isCleanShutdown()) {
                 nextTxid.set(metaData.getLastTxId() + 1);
                 if (metaData.getFreePages() > 0) {
-                    loadFreeList();
+                    // Migrate from db.free to db.data
+                    if(getFreeFile().exists()) {
+                        loadFreeList();
+                    }
                 }
             } else {
                 LOG.debug(toString() + ", Recovering page file...");
@@ -435,10 +518,36 @@ public class PageFile {
             if (trackingFreeDuringRecovery.get() != null) {
                 asyncFreePageRecovery(nextFreePageId.get());
             }
+
+            if (freePageIndex == null) {
+                Transaction tx = tx();
+                metaData.freePageIndexPageId = tx.allocate().pageId;
+                freePageIndex = new HashIndex<>(this, metaData.freePageIndexPageId);
+                storeMetaData();
+                freePageIndex.setKeyMarshaller(FreePageKey.instance);
+                freePageIndex.setValueMarshaller(BooleanMarshaller.INSTANCE);
+                freePageIndex.load(tx);
+                tx.commit();
+            } else {
+                freePageIndex.setKeyMarshaller(FreePageKey.instance);
+                freePageIndex.setValueMarshaller(BooleanMarshaller.INSTANCE);
+                Transaction tx = tx();
+                freePageIndex.load(tx);
+
+                for (Iterator<Entry<FreePageKey, Boolean>> iterator = freePageIndex.iterator(tx); iterator.hasNext();){
+                    Entry<FreePageKey, Boolean> pageMapInfo = iterator.next();
+
+                    if (pageMapInfo.getValue()) {
+                        freeList.add(pageMapInfo.getKey().value);
+                    }
+                }
+
+            }
         } else {
             throw new IllegalStateException("Cannot load the page file when it is already loaded.");
         }
     }
+
 
     private void asyncFreePageRecovery(final long lastRecoveryPage) {
         Thread thread = new Thread("KahaDB Index Free Page Recovery") {
@@ -481,11 +590,7 @@ public class PageFile {
         }
 
         LOG.info(toString() + ". Recovered pageFile free list of size: " + newFreePages.rangeSize());
-        if (!newFreePages.isEmpty()) {
-
-            // allow flush (with index lock held) to merge eventually
-            recoveredFreeList.lazySet(newFreePages);
-        }
+        recoveredFreeList.lazySet(newFreePages);
     }
 
     private void loadForRecovery(long nextFreePageIdSnap) throws Exception {
@@ -519,7 +624,6 @@ public class PageFile {
             if (freeList.isEmpty()) {
                 metaData.setFreePages(0);
             } else {
-                storeFreeList();
                 metaData.setFreePages(freeList.size());
             }
 
@@ -541,6 +645,7 @@ public class PageFile {
                     recoveryFile.close();
                     recoveryFile = null;
                 }
+
                 freeList.clear();
                 if (pageCache != null) {
                     pageCache = null;
@@ -628,6 +733,7 @@ public class PageFile {
         return new File(directory, IOHelper.toFileSystemSafeName(name) + FREE_FILE_SUFFIX);
     }
 
+
     public File getRecoveryFile() {
         return new File(directory, IOHelper.toFileSystemSafeName(name) + RECOVERY_FILE_SUFFIX);
     }
@@ -708,11 +814,14 @@ public class PageFile {
         writeFile.sync();
     }
 
-    private void storeFreeList() throws IOException {
-        FileOutputStream os = new FileOutputStream(getFreeFile());
-        DataOutputStream dos = new DataOutputStream(os);
-        SequenceSet.Marshaller.INSTANCE.writePayload(freeList, dos);
-        dos.close();
+    void updatePageMap(Transaction tx, SequenceSet freeList, SequenceSet allocatedList) throws IOException {
+        for (Long pageId: freeList) {
+            freePageIndex.put(tx, FreePageKey.fromLong(pageId), true);
+        }
+
+        for (Long pageId: allocatedList) {
+            freePageIndex.put(tx, FreePageKey.fromLong(pageId), false);
+        }
     }
 
     private void loadFreeList() throws IOException {
@@ -1180,7 +1289,6 @@ public class PageFile {
                     recoveryFile.sync();
                 }
             }
-
             for (PageWrite w : batch) {
                 writeFile.seek(toOffset(w.page.getPageId()));
                 writeFile.write(w.getDiskBound(tmpFilesForRemoval), 0, pageSize);

@@ -660,6 +660,7 @@ public class Transaction implements Iterable<Page> {
                 tmpFile = null;
                 txFile = null;
             }
+            pageFile.updatePageMap(this, freeList, allocateList);
             // Actually do the page writes...
             pageFile.write(writes.entrySet());
             // Release the pages that were freed up in the transaction..
