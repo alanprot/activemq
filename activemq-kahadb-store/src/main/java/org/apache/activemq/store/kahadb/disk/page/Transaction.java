@@ -656,8 +656,7 @@ public class Transaction implements Iterable<Page> {
     public void commit() throws IOException {
         if( writeTransactionId!=-1 ) {
             if (tmpFile != null) {
-                tmpFile.close();
-                pageFile.removeTmpFile(getTempFile());
+                pageFile.removeTmpFile(getTempFile(), tmpFile);
                 tmpFile = null;
                 txFile = null;
             }
@@ -682,8 +681,8 @@ public class Transaction implements Iterable<Page> {
     public void rollback() throws IOException {
         if( writeTransactionId!=-1 ) {
             if (tmpFile != null) {
+                getTempFile().delete();
                 tmpFile.close();
-                pageFile.removeTmpFile(getTempFile());
                 tmpFile = null;
                 txFile = null;
             }
