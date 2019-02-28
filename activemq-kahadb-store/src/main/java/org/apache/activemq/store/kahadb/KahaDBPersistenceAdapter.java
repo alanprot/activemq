@@ -245,6 +245,14 @@ public class KahaDBPersistenceAdapter extends LockableServiceSupport implements 
                     return letter.getJournal().getFileMap().keySet().toString();
                 }
             });
+            view.setOverallStoreLatencyViewCallable(() -> letter.messageDatabaseStatistics.getOverallStoreLatency().toString());
+
+            view.setPartialStoreLatencyViewCallable(() -> {
+                final String result = letter.messageDatabaseStatistics.getPartialStoreLatency().toString();
+                letter.messageDatabaseStatistics.getPartialStoreLatency().reset();
+                return result;
+            });
+
             AnnotatedMBean.registerMBean(brokerService.getManagementContext(), view,
                     createPersistenceAdapterName(brokerService.getBrokerObjectName().toString(), toString()));
         }

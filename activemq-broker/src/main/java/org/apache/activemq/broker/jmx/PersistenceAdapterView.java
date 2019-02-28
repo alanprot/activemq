@@ -26,6 +26,8 @@ public class PersistenceAdapterView implements PersistenceAdapterViewMBean {
 
     private Callable<String> inflightTransactionViewCallable;
     private Callable<String> dataViewCallable;
+    private Callable<String> overallStoreLatencyCallable;
+    private Callable<String> partialStoreLatencyCallable;
 
     public PersistenceAdapterView(PersistenceAdapter adapter) {
         this.name = adapter.toString();
@@ -52,6 +54,16 @@ public class PersistenceAdapterView implements PersistenceAdapterViewMBean {
         return persistenceAdapter.size();
     }
 
+    @Override
+    public String getOverallStoreLatency() {
+        return invoke(overallStoreLatencyCallable);
+    }
+
+    @Override
+    public String getPartialStoreLatency() {
+        return invoke(partialStoreLatencyCallable);
+    }
+
     private String invoke(Callable<String> callable) {
         String result = null;
         if (callable != null) {
@@ -70,5 +82,13 @@ public class PersistenceAdapterView implements PersistenceAdapterViewMBean {
 
     public void setInflightTransactionViewCallable(Callable<String> inflightTransactionViewCallable) {
         this.inflightTransactionViewCallable = inflightTransactionViewCallable;
+    }
+
+    public void setOverallStoreLatencyViewCallable(Callable<String> overallStoreLatencyCallable) {
+        this.overallStoreLatencyCallable = overallStoreLatencyCallable;
+    }
+
+    public void setPartialStoreLatencyViewCallable(Callable<String> partialStoreLatencyCallable) {
+        this.partialStoreLatencyCallable = partialStoreLatencyCallable;
     }
 }

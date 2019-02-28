@@ -29,4 +29,10 @@ public interface PersistenceAdapterViewMBean {
 
     @MBeanInfo("Current size.")
     long getSize();
+
+    @MBeanInfo("getStoreLatency size.")
+    String getOverallStoreLatency();
+
+    @MBeanInfo("getPartialStoreLatency size.")
+    String getPartialStoreLatency();
 }

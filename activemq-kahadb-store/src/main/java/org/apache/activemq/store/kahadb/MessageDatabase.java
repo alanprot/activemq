@@ -65,6 +65,7 @@ import org.apache.activemq.broker.region.Destination;
 import org.apache.activemq.broker.region.Queue;
 import org.apache.activemq.broker.region.Topic;
 import org.apache.activemq.command.TransactionId;
+import org.apache.activemq.management.TimeStatisticImpl;
 import org.apache.activemq.openwire.OpenWireFormat;
 import org.apache.activemq.protobuf.Buffer;
 import org.apache.activemq.store.MessageStore;
@@ -136,6 +137,29 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     static final int VERSION = 7;
 
     static final byte COMPACTED_JOURNAL_FILE = DataFile.STANDARD_LOG_FILE + 1;
+
+    protected class MessageDatabaseStatistics {
+        private TimeStatisticImpl overallStoreLatency;
+        private TimeStatisticImpl partialStoreLatency;
+
+        MessageDatabaseStatistics() {
+            overallStoreLatency = new TimeStatisticImpl("overallStoreLatency", "overallStoreLatency");
+            partialStoreLatency = new TimeStatisticImpl("partialStoreLatency", "partialStoreLatency");
+        }
+
+        void addTime(final long time) {
+            messageDatabaseStatistics.overallStoreLatency.addTime(time);
+            messageDatabaseStatistics.partialStoreLatency.addTime(time);
+        }
+
+        public TimeStatisticImpl getOverallStoreLatency() {
+            return overallStoreLatency;
+        }
+
+        public TimeStatisticImpl getPartialStoreLatency() {
+            return partialStoreLatency;
+        }
+    }
 
     protected class Metadata {
         protected Page<Metadata> page;
@@ -249,6 +273,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     protected PageFile pageFile;
     protected Journal journal;
     protected Metadata metadata = new Metadata();
+    protected MessageDatabaseStatistics messageDatabaseStatistics = new MessageDatabaseStatistics();
 
     protected MetadataMarshaller metadataMarshaller = new MetadataMarshaller();
 
@@ -1142,6 +1167,9 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                         LOG.info("Slow KahaDB access: Journal append took: "+(start2-start)+" ms, Index update took "+(end-start2)+" ms");
                     }
                 }
+
+                messageDatabaseStatistics.addTime(end - start);
+
             } finally {
                 checkpointLock.readLock().unlock();
             }
