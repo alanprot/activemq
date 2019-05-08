@@ -826,8 +826,8 @@ public class JobSchedulerStoreImpl extends AbstractKahaDBStore implements JobSch
             Map.Entry<String, JobSchedulerImpl> entry = i.next();
             JobSchedulerImpl scheduler = entry.getValue();
 
-            List<JobLocation> jobs = scheduler.getAllScheduledJobs(tx);
-            for (JobLocation job : jobs) {
+            for (Iterator<JobLocation> ijob =  scheduler.getAllScheduledJobs(tx); ijob.hasNext();) {
+                JobLocation job = ijob.next();
                 if (job.getLocation().compareTo(lastAppendLocation) >= 0) {
                     if (scheduler.removeJobAtTime(tx, job.getJobId(), job.getNextTime())) {
                         LOG.trace("Removed Job past last appened in the journal: {}", job.getJobId());
@@ -853,9 +853,8 @@ public class JobSchedulerStoreImpl extends AbstractKahaDBStore implements JobSch
         for (Iterator<Map.Entry<String, JobSchedulerImpl>> i = metaData.getJobSchedulers().iterator(tx); i.hasNext();) {
             Map.Entry<String, JobSchedulerImpl> entry = i.next();
             JobSchedulerImpl scheduler = entry.getValue();
-
-            List<JobLocation> jobs = scheduler.getAllScheduledJobs(tx);
-            for (JobLocation job : jobs) {
+            for (Iterator<JobLocation> ijob =  scheduler.getAllScheduledJobs(tx); ijob.hasNext();) {
+                JobLocation job = ijob.next();
                 missingJournalFiles.add(job.getLocation().getDataFileId());
                 if (job.getLastUpdate() != null) {
                     missingJournalFiles.add(job.getLastUpdate().getDataFileId());
@@ -937,8 +936,8 @@ public class JobSchedulerStoreImpl extends AbstractKahaDBStore implements JobSch
             Map.Entry<String, JobSchedulerImpl> entry = i.next();
             JobSchedulerImpl scheduler = entry.getValue();
 
-            List<JobLocation> jobs = scheduler.getAllScheduledJobs(tx);
-            for (JobLocation job : jobs) {
+            for (Iterator<JobLocation> ijob =  scheduler.getAllScheduledJobs(tx); ijob.hasNext();) {
+                JobLocation job = ijob.next();
 
                 // Remove all jobs in missing log files.
                 if (missing.contains(job.getLocation().getDataFileId())) {

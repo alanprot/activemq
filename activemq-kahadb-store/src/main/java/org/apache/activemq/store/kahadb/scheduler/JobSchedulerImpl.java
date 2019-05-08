@@ -16,18 +16,6 @@
  */
 package org.apache.activemq.store.kahadb.scheduler;
 
-import java.io.DataInput;
-import java.io.DataOutput;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import javax.jms.MessageFormatException;
-
 import org.apache.activemq.broker.scheduler.CronParser;
 import org.apache.activemq.broker.scheduler.Job;
 import org.apache.activemq.broker.scheduler.JobListener;
@@ -47,6 +35,18 @@ import org.apache.activemq.util.ServiceStopper;
 import org.apache.activemq.util.ServiceSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.jms.MessageFormatException;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class JobSchedulerImpl extends ServiceSupport implements Runnable, JobScheduler {
 
@@ -661,18 +661,31 @@ public class JobSchedulerImpl extends ServiceSupport implements Runnable, JobSch
      *
      * @throws IOException if an error occurs walking the scheduler tree.
      */
-    protected List<JobLocation> getAllScheduledJobs(Transaction tx) throws IOException {
-        List<JobLocation> references = new ArrayList<>();
+    protected Iterator<JobLocation> getAllScheduledJobs(Transaction tx) throws IOException {
+        return new Iterator<JobLocation>() {
 
-        for (Iterator<Map.Entry<Long, List<JobLocation>>> i = this.index.iterator(tx); i.hasNext();) {
-            Map.Entry<Long, List<JobLocation>> entry = i.next();
-            List<JobLocation> scheduled = entry.getValue();
-            for (JobLocation job : scheduled) {
-                references.add(job);
+            final Iterator<Map.Entry<Long, List<JobLocation>>> mapIterator = index.iterator(tx);
+            Iterator<JobLocation> iterator;
+
+            @Override
+            public boolean hasNext() {
+
+                while (iterator == null || !iterator.hasNext()) {
+                    if (!mapIterator.hasNext()) {
+                        break;
+                    }
+
+                    iterator = new ArrayList<>(mapIterator.next().getValue()).iterator();
+                }
+
+                return iterator != null && iterator.hasNext();
             }
-        }
 
-        return references;
+            @Override
+            public JobLocation next() {
+                return iterator.next();
+            }
+        };
     }
 
     @Override
